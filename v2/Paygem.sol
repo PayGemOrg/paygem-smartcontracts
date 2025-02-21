@@ -51,7 +51,6 @@ contract SubscriptionManager is ReentrancyGuard {
         uint256 timestamp;
     }
 
-    
     uint256 private serviceCounter;
     uint256 private planCounter;
     uint256 private subscriptionCounter;
@@ -64,22 +63,17 @@ contract SubscriptionManager is ReentrancyGuard {
 
     mapping(address => uint256) private userBalances;
 
-    
     event ServiceCreated(uint256 indexed serviceId, address indexed merchant, string name);
     event PlanCreated(uint256 indexed planId, uint256 indexed serviceId, string name);
     event SubscriptionCreated(uint256 indexed subscriptionId, address indexed user, uint256 planId);
-    event TransactionLogged(
-        uint256 indexed transactionId,
-        address indexed user,
-        address indexed merchant,
-        uint256 planId,
-        uint256 amount,
-        string status
-    );
+    event TransactionLogged(uint256 indexed transactionId, address indexed user, address indexed merchant, uint256 planId, uint256 amount, string status);
     event Deposit(address indexed user, uint256 amount);
     event Withdrawal(address indexed user, uint256 amount);
+    event ServiceUpdated(uint256 indexed serviceId, string name, string description, string tags);
+    event PlanUpdated(uint256 indexed planId, string name, uint256 price, string billingCycle);
+    event ServiceDeleted(uint256 indexed serviceId);
+    event PlanDeleted(uint256 indexed planId);
 
-    
     modifier onlyMerchant(uint256 serviceId) {
         require(services[serviceId].merchant == msg.sender, "Not authorized");
         _;
@@ -95,7 +89,6 @@ contract SubscriptionManager is ReentrancyGuard {
         _;
     }
 
-    
     function deposit() external payable {
         require(msg.value > 0, "Deposit must be greater than zero");
         userBalances[msg.sender] += msg.value;
@@ -111,7 +104,6 @@ contract SubscriptionManager is ReentrancyGuard {
         emit Withdrawal(msg.sender, amount);
     }
 
-    
     function createService(string memory name, string memory description, string memory tags) external {
         require(bytes(name).length > 0, "Service name is required");
         serviceCounter++;
@@ -119,14 +111,26 @@ contract SubscriptionManager is ReentrancyGuard {
         emit ServiceCreated(serviceCounter, msg.sender, name);
     }
 
+    function updateService(uint256 serviceId, string memory name, string memory description, string memory tags) external onlyMerchant(serviceId) {
+        Service storage service = services[serviceId];
+        service.name = name;
+        service.description = description;
+        service.tags = tags;
+        emit ServiceUpdated(serviceId, name, description, tags);
+    }
+
+    function deleteService(uint256 serviceId) external onlyMerchant(serviceId) {
+        delete services[serviceId];
+        emit ServiceDeleted(serviceId);
+    }
+
     function toggleServiceStatus(uint256 serviceId) external onlyMerchant(serviceId) {
         services[serviceId].isActive = !services[serviceId].isActive;
     }
 
-    
     function createPlan(
         uint256 serviceId,
-        uint256 merchant_id,
+        uint256 merchantId,
         string memory name,
         string memory description,
         uint256 price,
@@ -141,7 +145,7 @@ contract SubscriptionManager is ReentrancyGuard {
         plans[planCounter] = Plan(
             planCounter,
             serviceId,
-            merchant_id,
+            merchantId,
             name,
             description,
             price,
@@ -154,65 +158,57 @@ contract SubscriptionManager is ReentrancyGuard {
         emit PlanCreated(planCounter, serviceId, name);
     }
 
+    function updatePlan(uint256 planId, string memory name, uint256 price, string memory billingCycle) external {
+        Plan storage plan = plans[planId];
+        require(services[plan.serviceId].merchant == msg.sender, "Not authorized");
+        plan.name = name;
+        plan.price = price;
+        plan.billingCycle = billingCycle;
+        emit PlanUpdated(planId, name, price, billingCycle);
+    }
+
+    function deletePlan(uint256 planId) external {
+        require(services[plans[planId].serviceId].merchant == msg.sender, "Not authorized");
+        delete plans[planId];
+        emit PlanDeleted(planId);
+    }
+
     function togglePlanStatus(uint256 planId) external {
         Plan storage plan = plans[planId];
         require(services[plan.serviceId].merchant == msg.sender, "Not authorized");
         plan.isActive = !plan.isActive;
     }
 
-    
-    function createSubscription(uint256 planId, uint256 merchantId, string memory status, uint256 amount) external payable onlyActivePlan(planId) {
-        Plan storage plan = plans[planId];
-        require(plan.subscribersLimit == 0 || plan.subscriberCount < plan.subscribersLimit, "Subscriber limit reached");
-        require(msg.value == plan.price, "Incorrect subscription amount");
-
-        subscriptionCounter++;
-        subscriptions[subscriptionCounter] = Subscription(
-            subscriptionCounter,
-            msg.sender,
-            planId,
-            merchantId,
-            block.timestamp + 30 days,
-            true,
-            status,
-            amount
-        );
-
-        userBalances[services[plan.serviceId].merchant] += msg.value;
-        plan.subscriberCount++;
-        emit SubscriptionCreated(subscriptionCounter, msg.sender, planId);
+    function getAllServices() external view returns (Service[] memory) {
+        Service[] memory allServices = new Service[](serviceCounter);
+        for (uint256 i = 1; i <= serviceCounter; i++) {
+            allServices[i - 1] = services[i];
+        }
+        return allServices;
     }
 
-    
-    function makePayment(uint256 subscriptionId) external {
-        Subscription storage subscription = subscriptions[subscriptionId];
-        require(subscription.isActive, "Subscription is not active");
-        require(subscription.user == msg.sender, "Not authorized");
-
-        Plan storage plan = plans[subscription.planId];
-        require(userBalances[msg.sender] >= plan.price, "Insufficient balance");
-
-        userBalances[msg.sender] -= plan.price;
-        userBalances[services[plan.serviceId].merchant] += plan.price;
-
-        transactionCounter++;
-        transactions[transactionCounter] = Transaction(
-            transactionCounter,
-            msg.sender,
-            services[plan.serviceId].merchant,
-            plan.id,
-            plan.price,
-            services[plan.serviceId].name,
-            plan.currency,
-            "successful",
-            block.timestamp
-        );
-        emit TransactionLogged(transactionCounter, msg.sender, services[plan.serviceId].merchant, plan.id, plan.price, "successful");
+    function getAllPlans() external view returns (Plan[] memory) {
+        Plan[] memory allPlans = new Plan[](planCounter);
+        for (uint256 i = 1; i <= planCounter; i++) {
+            allPlans[i - 1] = plans[i];
+        }
+        return allPlans;
     }
 
-    
-    function getUserBalance(address user) external view returns (uint256) {
-        return userBalances[user];
+    function getAllSubscriptions() external view returns (Subscription[] memory) {
+        Subscription[] memory allSubscriptions = new Subscription[](subscriptionCounter);
+        for (uint256 i = 1; i <= subscriptionCounter; i++) {
+            allSubscriptions[i - 1] = subscriptions[i];
+        }
+        return allSubscriptions;
+    }
+
+    function getAllTransactions() external view returns (Transaction[] memory) {
+        Transaction[] memory allTransactions = new Transaction[](transactionCounter);
+        for (uint256 i = 1; i <= transactionCounter; i++) {
+            allTransactions[i - 1] = transactions[i];
+        }
+        return allTransactions;
     }
 
     function getService(uint256 serviceId) external view returns (Service memory) {
@@ -221,5 +217,9 @@ contract SubscriptionManager is ReentrancyGuard {
 
     function getPlan(uint256 planId) external view returns (Plan memory) {
         return plans[planId];
+    }
+
+    function getUserBalance(address user) external view returns (uint256) {
+        return userBalances[user];
     }
 }
